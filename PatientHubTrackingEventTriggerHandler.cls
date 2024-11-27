@@ -24,7 +24,6 @@ public without sharing class PatientHubTrackingEventTriggerHandler {
                 try{
                     // Iterate through each notification.
                     for (Patient_Hub_Tracking_Event__e event : events) {
-                        //List<String> sourceObjects = getTrackinObjects(event.Patient_Status_Code__c);
                         populateHubTracking(event.Enrollee_Id__c, event.Patient_Id__c);
                     }
                     if(hubTrackings.size()>0){
@@ -146,7 +145,6 @@ public without sharing class PatientHubTrackingEventTriggerHandler {
                                                    if(coverageBenefit.MemberPlan.Status == 'Active' && coverageBenefit.MemberPlan.J_Role__c == 'Secondary'){
                                                        hubTracking.SECONDARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
                                                        hubTracking.SECONDARY_CO_PAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
-                                                       //hubTracking.FINAL_PATIENT_OUT_OF_POCKET_COST__c = coverageBenefit.J_OOPMax__c;
                                                    }
                                                    for(CarePreauth priAuth : [SELECT Id, Status, J_AuthorizationEndDate__c, MemberPlan.J_Role__c from CarePreauth where J_CoverageBenefit__c =: coverageBenefit.Id AND Status = 'Active' WITH SECURITY_ENFORCED LIMIT 1 ]){
                                                        
@@ -261,73 +259,73 @@ public without sharing class PatientHubTrackingEventTriggerHandler {
     
     
     
-    private static SObject[] querySourceObject(String enrolleeId, String patientId, String sourceObjectName, List<Hub_Tracking_Field_Mapping__mdt>   hubTrackingMappings){
-        String query = 'SELECT Id';
-        //Adding source fields to a set to remove duplicates
-        Set<String> sourceFields = new Set<String>();
-        for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappings){
-            if(hubTrackingmapping.SourceField__c != 'Id'){
-                sourceFields.add(hubTrackingmapping.SourceField__c);
-            }
-        }
-        for(String sourceField : sourceFields){
-            query += ', '+sourceField;
-        }
-        if(sourceObjectName == 'MemberPlan'){
-            query += ', J_Role__c';
-        }
-        if(sourceObjectName == 'J_Charitable__c'){
-            query += ', J_CharitableProgramType__c';
-        }
-        if(sourceObjectName == 'J_Referral__c'){
-            query += ', NDC_Code__c';
-        } 
-        if(sourceObjectName == 'J_Order__c'){
-            query += ', Patient_Medication_Dosage__c';
-        } 
-        if(sourceObjectName == 'PatientMedicationDosage'){
-            query += ', Unit_Daily_Dose__c, Patients_Current_Prescribed_Dose__c';
-        }
-        
-        query += ' FROM '+sourceObjectName;
-        if(sourceObjectName == 'CareProgramEnrollee'){
-            query += ' WHERE Id =:enrolleeId';
-        }
-        else if(sourceObjectName == 'Account'){
-            query += ' WHERE Id =:patientId';
-        }
-        else if(sourceObjectName == 'J_Referral__c'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId AND Status__c =\'Active\'';
-            //query += ' WHERE Care_Program_Enrollee__c =:enrolleeId';
-        }
-        else if(sourceObjectName == 'MemberPlan'){
-            query += ' WHERE MemberId =:patientId AND Status =\'Active\'';
-        }
-        else if(sourceObjectName == 'J_Copay__c'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId AND J_CurrentCopayStatus__c =\'Active\'';
-        }
-        else if(sourceObjectName == 'J_Charitable__c'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId';
-        }
-        else if(sourceObjectName == 'J_Order__c'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId';
-        }
-        else if(sourceObjectName == 'PatientMedicationDosage'){
-            query += ' WHERE Care_Program_Enrollee_Name__c =:enrolleeId AND Current_Dose_Record__c = True';
-        }
-        else if(sourceObjectName == 'CarePreauth'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId AND Status =\'Active\'';
-        }
-        else if(sourceObjectName == 'CoverageBenefit'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId';
-        }
-        else if(sourceObjectName == 'Case'){
-            query += ' WHERE Care_Program_Enrollee__c =:enrolleeId';
-        }
+    private static SObject[] querySourceObject(String sourceObjectName, List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappings) {
+        // Build SELECT clause
+        String query = buildSelectClause(sourceObjectName, hubTrackingMappings);
+    
+        // Add WHERE clause based on object name
+        query += buildWhereClause(sourceObjectName);
+    
+        // Add ORDER BY CreatedDate ASC
         query += ' ORDER BY CreatedDate ASC';
+    
+        // Log the query for debugging purposes
         GenericLogger.debugLog(query);
+    
+        // Execute the query
         return Database.query(query);
     }
+    
+    // Helper method to build SELECT clause
+    private static String buildSelectClause(String sourceObjectName, List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappings) {
+        StringBuilder queryBuilder = new StringBuilder('SELECT Id');
+    
+        // Add source fields
+        Set<String> sourceFields = new Set<String>();
+        for (Hub_Tracking_Field_Mapping__mdt mapping : hubTrackingMappings) {
+            if (mapping.SourceField__c != 'Id') {
+                sourceFields.add(mapping.SourceField__c);
+            }
+        }
+        for (String sourceField : sourceFields) {
+            queryBuilder.append(', ').append(sourceField);
+        }
+    
+        // Add specific fields for certain objects
+        Map<String, String> additionalFields = new Map<String, String>{
+            'MemberPlan' => ', J_Role__c',
+            'J_Charitable__c' => ', J_CharitableProgramType__c',
+            'J_Referral__c' => ', NDC_Code__c',
+            'J_Order__c' => ', Patient_Medication_Dosage__c',
+            'PatientMedicationDosage' => ', Unit_Daily_Dose__c, Patients_Current_Prescribed_Dose__c'
+        };
+    
+        if (additionalFields.containsKey(sourceObjectName)) {
+            queryBuilder.append(additionalFields.get(sourceObjectName));
+        }
+    
+        return queryBuilder.toString();
+    }
+    
+    // Helper method to build WHERE clause
+    private static String buildWhereClause(String sourceObjectName) {
+        Map<String, String> whereClauses = new Map<String, String>{
+            'CareProgramEnrollee' => ' WHERE Id =:enrolleeId',
+            'Account' => ' WHERE Id =:patientId',
+            'J_Referral__c' => ' WHERE Care_Program_Enrollee__c =:enrolleeId AND Status__c =\'Active\'',
+            'MemberPlan' => ' WHERE MemberId =:patientId AND Status =\'Active\'',
+            'J_Copay__c' => ' WHERE Care_Program_Enrollee__c =:enrolleeId AND J_CurrentCopayStatus__c =\'Active\'',
+            'J_Charitable__c' => ' WHERE Care_Program_Enrollee__c =:enrolleeId',
+            'J_Order__c' => ' WHERE Care_Program_Enrollee__c =:enrolleeId',
+            'PatientMedicationDosage' => ' WHERE Care_Program_Enrollee_Name__c =:enrolleeId AND Current_Dose_Record__c = True',
+            'CarePreauth' => ' WHERE Care_Program_Enrollee__c =:enrolleeId AND Status =\'Active\'',
+            'CoverageBenefit' => ' WHERE Care_Program_Enrollee__c =:enrolleeId',
+            'Case' => ' WHERE Care_Program_Enrollee__c =:enrolleeId'
+        };
+    
+        return whereClauses.containsKey(sourceObjectName) ? whereClauses.get(sourceObjectName) : '';
+    }
+    
     
     private static String getFieldValue(SObject obj, String inputFieldName){
         Object fieldValue;
