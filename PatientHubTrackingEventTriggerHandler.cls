@@ -225,93 +225,117 @@ private static void finalizeHubTrackingFields(T_Hub_Tracking__c hubTracking) {
         createMultipleRecords(enrolleeId, patientId);
     }
     
-    private static void createMultipleRecords(String enrolleeId, String patientId){
-        
-        
-        List<Hub_Tracking_Field_Mapping__mdt>   hubTrackingMappingsForReferral = [SELECT Id,SourceField__c,Target_Object__r.QualifiedAPIName,Target_Field__r.QualifiedAPIName from Hub_Tracking_Field_Mapping__mdt where Source_Object__r.QualifiedAPIName='J_Referral__c'  WITH SECURITY_ENFORCED];
-        Map<String, SObject> ndcToReferralMap = new Map<String, SObject>();
-        for(SObject referralRecord : querySourceObject(enrolleeId, patientId, 'J_Referral__c', hubTrackingMappingsForReferral)){
-            ndcToReferralMap.put(getFieldValue(referralRecord,'NDC_Code__c'), referralRecord);
-        }
-        
-        List<Hub_Tracking_Field_Mapping__mdt>   hubTrackingMappingsForOrder = [SELECT Id,SourceField__c,Target_Object__r.QualifiedAPIName,Target_Field__r.QualifiedAPIName from Hub_Tracking_Field_Mapping__mdt where Source_Object__r.QualifiedAPIName='J_Order__c' WITH SECURITY_ENFORCED ];
-        Map<String, SObject> medicationDosageIdToOrderMap = new Map<String, SObject>();
-        for(SObject orderRecord : querySourceObject(enrolleeId, patientId, 'J_Order__c', hubTrackingMappingsForOrder)){
-            medicationDosageIdToOrderMap.put(getFieldValue(orderRecord,'Patient_Medication_Dosage__c'), orderRecord);
-        }
-        
-        List<Hub_Tracking_Field_Mapping__mdt>   hubTrackingMappingsForPatientMedication = [SELECT Id,SourceField__c,Target_Object__r.QualifiedAPIName,Target_Field__r.QualifiedAPIName from Hub_Tracking_Field_Mapping__mdt where Source_Object__r.QualifiedAPIName='PatientMedicationDosage' WITH SECURITY_ENFORCED ];
+    private static void createMultipleRecords(String enrolleeId, String patientId) {
+        Map<String, SObject> ndcToReferralMap = getNdcToReferralMap(enrolleeId, patientId);
+        Map<String, SObject> medicationDosageIdToOrderMap = getMedicationDosageIdToOrderMap(enrolleeId, patientId);
+    
+        List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication = 
+            [SELECT Id, SourceField__c, Target_Object__r.QualifiedAPIName, Target_Field__r.QualifiedAPIName 
+             FROM Hub_Tracking_Field_Mapping__mdt WHERE Source_Object__r.QualifiedAPIName = 'PatientMedicationDosage' 
+             WITH SECURITY_ENFORCED];
+    
         SObject[] patientMedicationDosageRecords = querySourceObject(enrolleeId, patientId, 'PatientMedicationDosage', hubTrackingMappingsForPatientMedication);
-        List<T_Hub_Tracking__c> hubTrackingList = new List<T_Hub_Tracking__c>(hubTrackings); 
-        for(T_Hub_Tracking__c populatedHubTracking : hubTrackingList){
-            Integer count = 1;
-
-            
-            for(SObject sourceObject : patientMedicationDosageRecords)
-            {              
-                T_Hub_Tracking__c hubTracking = new T_Hub_Tracking__c();  
-                
-                String ndcCode;
-                String medicationDosageId = getFieldValue(sourceObject,'Id');
-                if(count == 1){
-                    hubTracking = populatedHubTracking;
-                }else{
-                    hubTracking = populatedHubTracking.clone(false, true, false, false);
-                }
-                
-                for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappingsForOrder){
-                    hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, '');
-                    
-                }
-                for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappingsForReferral){
-                    hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, '');
-                    
-                }
-                
-                for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappingsForPatientMedication){
-                    String fieldValue = getFieldValue(sourceObject,hubTrackingmapping.SourceField__c);
-                    hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, fieldValue);
-                    
-                    if(hubTrackingmapping.SourceField__c == 'NDC_Code__c'){
-                        ndcCode = fieldValue;
-                    }
-                    
-                }
-                
-                if(String.isNotBlank(ndcCode) && ndcToReferralMap.containsKey(ndcCode)){
-                    SObject referral = ndcToReferralMap.get(ndcCode);
-                    
-                    for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappingsForReferral){
-                        hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(referral,hubTrackingmapping.SourceField__c));
-                    }
-                }
-                
-                if(String.isNotBlank(medicationDosageId) && medicationDosageIdToOrderMap.containsKey(medicationDosageId)){
-                    SObject order = medicationDosageIdToOrderMap.get(medicationDosageId);
-                    
-                    for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappingsForOrder){
-                        hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(order,hubTrackingmapping.SourceField__c));
-                        hubTracking.RX_Recieved__c  = 'Y';
-                    }
-                    
-                }
-                else{
-                    hubTracking.RX_Recieved__c = 'N';
-                }
-                
-                if(count > 1){
-                    
-                    hubTrackings.add(hubTracking);
-                }
-                
-                count++;
+        List<T_Hub_Tracking__c> hubTrackingList = new List<T_Hub_Tracking__c>(hubTrackings);
+    
+        for (T_Hub_Tracking__c populatedHubTracking : hubTrackingList) {
+            createHubTrackingForMedicationDosage(populatedHubTracking, patientMedicationDosageRecords, hubTrackingMappingsForPatientMedication, ndcToReferralMap, medicationDosageIdToOrderMap);
+        }
+    }
+    
+    private static Map<String, SObject> getNdcToReferralMap(String enrolleeId, String patientId) {
+        List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForReferral = 
+            [SELECT Id, SourceField__c, Target_Object__r.QualifiedAPIName, Target_Field__r.QualifiedAPIName 
+             FROM Hub_Tracking_Field_Mapping__mdt WHERE Source_Object__r.QualifiedAPIName = 'J_Referral__c' 
+             WITH SECURITY_ENFORCED];
+    
+        Map<String, SObject> ndcToReferralMap = new Map<String, SObject>();
+        for (SObject referralRecord : querySourceObject(enrolleeId, patientId, 'J_Referral__c', hubTrackingMappingsForReferral)) {
+            ndcToReferralMap.put(getFieldValue(referralRecord, 'NDC_Code__c'), referralRecord);
+        }
+        return ndcToReferralMap;
+    }
+    
+    private static Map<String, SObject> getMedicationDosageIdToOrderMap(String enrolleeId, String patientId) {
+        List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForOrder = 
+            [SELECT Id, SourceField__c, Target_Object__r.QualifiedAPIName, Target_Field__r.QualifiedAPIName 
+             FROM Hub_Tracking_Field_Mapping__mdt WHERE Source_Object__r.QualifiedAPIName = 'J_Order__c' 
+             WITH SECURITY_ENFORCED];
+    
+        Map<String, SObject> medicationDosageIdToOrderMap = new Map<String, SObject>();
+        for (SObject orderRecord : querySourceObject(enrolleeId, patientId, 'J_Order__c', hubTrackingMappingsForOrder)) {
+            medicationDosageIdToOrderMap.put(getFieldValue(orderRecord, 'Patient_Medication_Dosage__c'), orderRecord);
+        }
+        return medicationDosageIdToOrderMap;
+    }
+    
+    private static void createHubTrackingForMedicationDosage(T_Hub_Tracking__c populatedHubTracking, SObject[] patientMedicationDosageRecords, 
+                                                             List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication, 
+                                                             Map<String, SObject> ndcToReferralMap, Map<String, SObject> medicationDosageIdToOrderMap) {
+        Integer count = 1;
+        
+        for (SObject sourceObject : patientMedicationDosageRecords) {
+            T_Hub_Tracking__c hubTracking = createNewHubTracking(count, populatedHubTracking);
+            String ndcCode = processPatientMedicationDosage(hubTracking, sourceObject, hubTrackingMappingsForPatientMedication, ndcToReferralMap, medicationDosageIdToOrderMap);
+            processOrderAndReferralData(hubTracking, ndcCode, medicationDosageIdToOrderMap, ndcToReferralMap, hubTrackingMappingsForPatientMedication);
+    
+            if (count > 1) {
+                hubTrackings.add(hubTracking);
+            }
+            count++;
+        }
+    }
+    
+    private static T_Hub_Tracking__c createNewHubTracking(Integer count, T_Hub_Tracking__c populatedHubTracking) {
+        T_Hub_Tracking__c hubTracking;
+        if (count == 1) {
+            hubTracking = populatedHubTracking;
+        } else {
+            hubTracking = populatedHubTracking.clone(false, true, false, false);
+        }
+        return hubTracking;
+    }
+    
+    private static String processPatientMedicationDosage(T_Hub_Tracking__c hubTracking, SObject sourceObject, 
+                                                          List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication, 
+                                                          Map<String, SObject> ndcToReferralMap, 
+                                                          Map<String, SObject> medicationDosageIdToOrderMap) {
+        String ndcCode = '';
+        
+        for (Hub_Tracking_Field_Mapping__mdt hubTrackingmapping : hubTrackingMappingsForPatientMedication) {
+            String fieldValue = getFieldValue(sourceObject, hubTrackingmapping.SourceField__c);
+            hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, fieldValue);
+    
+            if (hubTrackingmapping.SourceField__c == 'NDC_Code__c') {
+                ndcCode = fieldValue;
             }
         }
         
+        return ndcCode;
     }
     
+    private static void processOrderAndReferralData(T_Hub_Tracking__c hubTracking, String ndcCode, 
+                                                     Map<String, SObject> medicationDosageIdToOrderMap, 
+                                                     Map<String, SObject> ndcToReferralMap, 
+                                                     List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication) {
+        if (String.isNotBlank(ndcCode) && ndcToReferralMap.containsKey(ndcCode)) {
+            SObject referral = ndcToReferralMap.get(ndcCode);
+            for (Hub_Tracking_Field_Mapping__mdt hubTrackingmapping : hubTrackingMappingsForPatientMedication) {
+                hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(referral, hubTrackingmapping.SourceField__c));
+            }
+        }
     
-    
+        String medicationDosageId = getFieldValue(hubTracking, 'Id');
+        if (String.isNotBlank(medicationDosageId) && medicationDosageIdToOrderMap.containsKey(medicationDosageId)) {
+            SObject order = medicationDosageIdToOrderMap.get(medicationDosageId);
+            for (Hub_Tracking_Field_Mapping__mdt hubTrackingmapping : hubTrackingMappingsForPatientMedication) {
+                hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(order, hubTrackingmapping.SourceField__c));
+                hubTracking.RX_Recieved__c = 'Y';
+            }
+        } else {
+            hubTracking.RX_Recieved__c = 'N';
+        }
+    }
+
     private static SObject[] querySourceObject(String sourceObjectName, List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappings) {
         // Build SELECT clause
         String query = buildSelectClause(sourceObjectName, hubTrackingMappings);
