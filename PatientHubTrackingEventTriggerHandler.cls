@@ -161,33 +161,45 @@ private static void handleDisease(String enrolleeId, Id carePlanRecordTypeId, T_
 }
 
 private static void handleCoverageBenefits(String enrolleeId, T_Hub_Tracking__c hubTracking) {
-    for (CoverageBenefit coverageBenefit : [SELECT Id, J_PriorAuthorizationRequired__c, J_BenefitType__c, MemberPlan.Status, 
-                                             MemberPlan.J_Role__c, J_CoPay__c, J_OOPMax__c 
+    for (CoverageBenefit coverageBenefit : [SELECT Id, J_PriorAuthorizationRequired__c, J_BenefitType__c, 
+                                             MemberPlan.Status, MemberPlan.J_Role__c, J_CoPay__c, J_OOPMax__c 
                                              FROM CoverageBenefit WHERE Care_Program_Enrollee__c = :enrolleeId 
                                              AND J_CoverageBenefitStatus__c = 'Active' WITH SECURITY_ENFORCED LIMIT 3]) {
         if (coverageBenefit.MemberPlan.Status == 'Active') {
-            if (coverageBenefit.MemberPlan.J_Role__c == 'Primary') {
-                hubTracking.Primary_Prior_Authorization_Required__c = (coverageBenefit.J_PriorAuthorizationRequired__c == 'Yes') ? 'Y' : 'N';
-                hubTracking.PRIMARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
-                hubTracking.PRIMARY_COPAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
-                hubTracking.FINAL_PATIENT_OUT_OF_POCKET_COST__c = coverageBenefit.J_OOPMax__c;
-            }
-            if (coverageBenefit.MemberPlan.J_Role__c == 'Secondary') {
-                hubTracking.SECONDARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
-                hubTracking.SECONDARY_CO_PAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
-            }
+            handlePrimaryAndSecondaryCoverage(coverageBenefit, hubTracking);
         }
 
-        for (CarePreauth priAuth : [SELECT Id, Status, J_AuthorizationEndDate__c, MemberPlan.J_Role__c 
-                                    FROM CarePreauth WHERE J_CoverageBenefit__c = :coverageBenefit.Id 
-                                    AND Status = 'Active' WITH SECURITY_ENFORCED LIMIT 1]) {
-            if (priAuth.MemberPlan.J_Role__c == 'Primary') {
-                hubTracking.PA_Status__c = priAuth.Status;
-                hubTracking.PRIMARY_PA_EXPIRATION_DATE__c = priAuth.J_AuthorizationEndDate__c;
-            }
+        handleCarePreAuth(coverageBenefit, hubTracking);
+    }
+}
+
+private static void handlePrimaryAndSecondaryCoverage(CoverageBenefit coverageBenefit, T_Hub_Tracking__c hubTracking) {
+    if (coverageBenefit.MemberPlan.J_Role__c == 'Primary') {
+        hubTracking.Primary_Prior_Authorization_Required__c = getAuthorizationStatus(coverageBenefit.J_PriorAuthorizationRequired__c);
+        hubTracking.PRIMARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
+        hubTracking.PRIMARY_COPAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
+        hubTracking.FINAL_PATIENT_OUT_OF_POCKET_COST__c = coverageBenefit.J_OOPMax__c;
+    } else if (coverageBenefit.MemberPlan.J_Role__c == 'Secondary') {
+        hubTracking.SECONDARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
+        hubTracking.SECONDARY_CO_PAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
+    }
+}
+
+private static String getAuthorizationStatus(String priorAuthorizationRequired) {
+    return (priorAuthorizationRequired == 'Yes') ? 'Y' : 'N';
+}
+
+private static void handleCarePreAuth(CoverageBenefit coverageBenefit, T_Hub_Tracking__c hubTracking) {
+    for (CarePreauth priAuth : [SELECT Id, Status, J_AuthorizationEndDate__c, MemberPlan.J_Role__c 
+                                FROM CarePreauth WHERE J_CoverageBenefit__c = :coverageBenefit.Id 
+                                AND Status = 'Active' WITH SECURITY_ENFORCED LIMIT 1]) {
+        if (priAuth.MemberPlan.J_Role__c == 'Primary') {
+            hubTracking.PA_Status__c = priAuth.Status;
+            hubTracking.PRIMARY_PA_EXPIRATION_DATE__c = priAuth.J_AuthorizationEndDate__c;
         }
     }
 }
+
 
 private static void handleCharitableProgram(String enrolleeId, T_Hub_Tracking__c hubTracking) {
     for (J_Charitable__c papTpap : [SELECT Id, J_CharitableProgramType__c, J_Enrollment_End_Date__c 
