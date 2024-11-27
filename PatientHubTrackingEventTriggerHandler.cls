@@ -52,120 +52,161 @@ public without sharing class PatientHubTrackingEventTriggerHandler {
  * @param enrolleeId The ID of the CareProgramEnrollee record used to fetch related data.
  * @param patientId  The ID of the Patient record used to fetch related data.
  */ 
-    public static void populateHubTracking(String enrolleeId, String patientId){
-        
-        Id carePlanRecordTypeId = [ SELECT Id FROM RecordType WHERE SObjectType = 'Case' AND Name = 'CarePlan' LIMIT 1].Id;
-        
-        T_Hub_Tracking__c hubTracking = new T_Hub_Tracking__c();
-        hubTracking.PHI_Consent__c = 'N';
-        hubTracking.HIPPA_Consent__c = 'N';
-        hubTracking.Referral_Source__c  = 'HUB';
-        hubTracking.RX_Recieved__c  = 'N';
-        hubTracking.Primary_Prior_Authorization_Required__c = 'N';
-        
-        CareProgramEnrollee enrollee = [SELECT Id, HCP_Lead__c, HCP_Lead__r.Lead_ID__c, Lead.Lead_ID__c, LeadId, Status, Sub_Status__c, CareProgramId FROM CareProgramEnrollee  WHERE Id = :enrolleeId WITH SECURITY_ENFORCED];
-        
-        for(CareProgramProduct cpprod : [SELECT Id, Product.Name, CareProgramId FROM CareProgramProduct WHERE CareProgramId = :enrollee.CareProgramId WITH SECURITY_ENFORCED LIMIT 1]){
-            
-            hubTracking.Brand_Name__c = cpprod.Product.Name;
-            
-        }
-        
-        for(String sourceObjectName : sourceObjectNames){
-            List<Hub_Tracking_Field_Mapping__mdt>   hubTrackingMappings = [SELECT Id,SourceField__c,Target_Object__r.QualifiedAPIName,Target_Field__r.QualifiedAPIName from Hub_Tracking_Field_Mapping__mdt where Source_Object__r.QualifiedAPIName=: sourceObjectName WITH SECURITY_ENFORCED];
-            SObject[] sourceObjectRecords = querySourceObject(enrolleeId, patientId, sourceObjectName, hubTrackingMappings);
-            
-            
-            
-            for(SObject sourceObject : sourceObjectRecords){
-                for(Hub_Tracking_Field_Mapping__mdt hubTrackingmapping: hubTrackingMappings){
-                    
-                    
-                    if(sourceObjectName == 'MemberPlan'){
-                        if(sourceObject.get('J_Role__c') == 'Primary' && hubTrackingmapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('Primary')){
-                            hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(sourceObject,hubTrackingmapping.SourceField__c));
-                        }
-                        else if( sourceObject.get('J_Role__c') == 'Secondary' && hubTrackingmapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('Secondary')){
-                            hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(sourceObject,hubTrackingmapping.SourceField__c));
-                        }
-                    }
-                    else if(sourceObjectName == 'J_Charitable__c'){
-                        if(sourceObject.get('J_CharitableProgramType__c') == 'TPAP' && hubTrackingmapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('TPAP')){
-                            hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(sourceObject,hubTrackingmapping.SourceField__c));
-                        }
-                        else if(sourceObject.get('J_CharitableProgramType__c') != 'TPAP' && !hubTrackingmapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('TPAP')){
-                            hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(sourceObject,hubTrackingmapping.SourceField__c));
-                        }
-                    }
-                    
-                    else{
-                        hubTracking.put(hubTrackingmapping.Target_Field__r.QualifiedAPIName, getFieldValue(sourceObject,hubTrackingmapping.SourceField__c));
-                    }
-                }
-                
+public static void populateHubTracking(String enrolleeId, String patientId) {
+    Id carePlanRecordTypeId = getCarePlanRecordTypeId();
+    
+    T_Hub_Tracking__c hubTracking = initializeHubTracking();
+    
+    // Populate hubTracking fields from CareProgramEnrollee and CareProgramProduct
+    populateCareProgramFields(enrolleeId, hubTracking);
+    
+    // Process each source object for mapping and populate hubTracking accordingly
+    for (String sourceObjectName : sourceObjectNames) {
+        List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappings = getHubTrackingMappings(sourceObjectName);
+        SObject[] sourceObjectRecords = querySourceObject(enrolleeId, patientId, sourceObjectName, hubTrackingMappings);
+        populateFieldsFromSourceObjects(sourceObjectRecords, hubTracking, hubTrackingMappings, sourceObjectName);
+    }
+    
+    // Handle consents and authorization form
+    handleConsents(enrolleeId, hubTracking);
+    
+    // Handle diseases for the case
+    handleDisease(enrolleeId, carePlanRecordTypeId, hubTracking);
+    
+    // Handle coverage benefits and preauthorizations
+    handleCoverageBenefits(enrolleeId, hubTracking);
+    
+    // Handle charitable program data
+    handleCharitableProgram(enrolleeId, hubTracking);
+
+    // Finalize any remaining fields
+    finalizeHubTrackingFields(hubTracking);
+
+    // Perform any final operations (e.g., insert/update)
+    // insert or update hubTracking as needed
+}
+
+private static Id getCarePlanRecordTypeId() {
+    return [SELECT Id FROM RecordType WHERE SObjectType = 'Case' AND Name = 'CarePlan' LIMIT 1].Id;
+}
+
+private static T_Hub_Tracking__c initializeHubTracking() {
+    T_Hub_Tracking__c hubTracking = new T_Hub_Tracking__c();
+    hubTracking.PHI_Consent__c = 'N';
+    hubTracking.HIPPA_Consent__c = 'N';
+    hubTracking.Referral_Source__c = 'HUB';
+    hubTracking.RX_Recieved__c = 'N';
+    hubTracking.Primary_Prior_Authorization_Required__c = 'N';
+    return hubTracking;
+}
+
+private static void populateCareProgramFields(String enrolleeId, T_Hub_Tracking__c hubTracking) {
+    CareProgramEnrollee enrollee = [SELECT Id, HCP_Lead__c, HCP_Lead__r.Lead_ID__c, Lead.Lead_ID__c, LeadId, Status, Sub_Status__c, CareProgramId 
+                                    FROM CareProgramEnrollee WHERE Id = :enrolleeId WITH SECURITY_ENFORCED];
+    
+    for (CareProgramProduct cpprod : [SELECT Id, Product.Name, CareProgramId 
+                                      FROM CareProgramProduct WHERE CareProgramId = :enrollee.CareProgramId WITH SECURITY_ENFORCED LIMIT 1]) {
+        hubTracking.Brand_Name__c = cpprod.Product.Name;
+    }
+}
+
+private static List<Hub_Tracking_Field_Mapping__mdt> getHubTrackingMappings(String sourceObjectName) {
+    return [SELECT Id, SourceField__c, Target_Object__r.QualifiedAPIName, Target_Field__r.QualifiedAPIName 
+            FROM Hub_Tracking_Field_Mapping__mdt 
+            WHERE Source_Object__r.QualifiedAPIName = :sourceObjectName WITH SECURITY_ENFORCED];
+}
+
+private static void populateFieldsFromSourceObjects(SObject[] sourceObjectRecords, T_Hub_Tracking__c hubTracking, 
+                                                     List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappings, String sourceObjectName) {
+    for (SObject sourceObject : sourceObjectRecords) {
+        for (Hub_Tracking_Field_Mapping__mdt mapping : hubTrackingMappings) {
+            String fieldValue = getFieldValue(sourceObject, mapping.SourceField__c);
+            if (shouldPopulateField(sourceObjectName, sourceObject, mapping)) {
+                hubTracking.put(mapping.Target_Field__r.QualifiedAPIName, fieldValue);
             }
         }
-        
-        for(AuthorizationFormConsent consent : [SELECT Id,J_ConsentExpirationDate__c,J_ConsentStatus__c, Signatured_Date_PHI__c from AuthorizationFormConsent where Care_Program_Enrollee__c =:enrolleeId AND J_TypeOfConsent__c = 'Patient Authorization' WITH SECURITY_ENFORCED ]){
-            
-            
-            hubTracking.Consent_Expiration_Date__c = String.valueOf(consent.J_ConsentExpirationDate__c)?.replaceAll('-','');
-            if(consent.J_ConsentStatus__c ==  'Active'){
-                hubTracking.PHI_Consent__c = 'Y';
-                hubTracking.HIPPA_Consent__c = 'Y';
-                Date hippaConsentDate = consent.J_ConsentExpirationDate__c;
-                hubTracking.HIPPA_Consent_Date__c = String.valueOf(hippaConsentDate)?.replaceAll('-','');
+    }
+}
+
+private static Boolean shouldPopulateField(String sourceObjectName, SObject sourceObject, Hub_Tracking_Field_Mapping__mdt mapping) {
+    if (sourceObjectName == 'MemberPlan') {
+        return (sourceObject.get('J_Role__c') == 'Primary' && mapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('Primary')) ||
+               (sourceObject.get('J_Role__c') == 'Secondary' && mapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('Secondary'));
+    } else if (sourceObjectName == 'J_Charitable__c') {
+        return (sourceObject.get('J_CharitableProgramType__c') == 'TPAP' && mapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('TPAP')) ||
+               (sourceObject.get('J_CharitableProgramType__c') != 'TPAP' && !mapping.Target_Field__r.QualifiedAPIName.containsIgnoreCase('TPAP'));
+    } else {
+        return true;
+    }
+}
+
+private static void handleConsents(String enrolleeId, T_Hub_Tracking__c hubTracking) {
+    for (AuthorizationFormConsent consent : [SELECT Id, J_ConsentExpirationDate__c, J_ConsentStatus__c, Signatured_Date_PHI__c 
+                                             FROM AuthorizationFormConsent WHERE Care_Program_Enrollee__c = :enrolleeId 
+                                             AND J_TypeOfConsent__c = 'Patient Authorization' WITH SECURITY_ENFORCED]) {
+        hubTracking.Consent_Expiration_Date__c = String.valueOf(consent.J_ConsentExpirationDate__c)?.replaceAll('-', '');
+        if (consent.J_ConsentStatus__c == 'Active') {
+            hubTracking.PHI_Consent__c = 'Y';
+            hubTracking.HIPPA_Consent__c = 'Y';
+            hubTracking.HIPPA_Consent_Date__c = String.valueOf(consent.J_ConsentExpirationDate__c)?.replaceAll('-', '');
+        }
+    }
+}
+
+private static void handleDisease(String enrolleeId, Id carePlanRecordTypeId, T_Hub_Tracking__c hubTracking) {
+    for (Case tp : [SELECT Id, Disease__c FROM Case WHERE Care_Program_Enrollee__c = :enrolleeId 
+                    AND RecordTypeId = :carePlanRecordTypeId WITH SECURITY_ENFORCED]) {
+        hubTracking.Indication__c = (tp.Disease__c == 'Fibrodysplasia Ossificans Progressiva (FOP)') ? 'FOP' : tp.Disease__c;
+    }
+}
+
+private static void handleCoverageBenefits(String enrolleeId, T_Hub_Tracking__c hubTracking) {
+    for (CoverageBenefit coverageBenefit : [SELECT Id, J_PriorAuthorizationRequired__c, J_BenefitType__c, MemberPlan.Status, 
+                                             MemberPlan.J_Role__c, J_CoPay__c, J_OOPMax__c 
+                                             FROM CoverageBenefit WHERE Care_Program_Enrollee__c = :enrolleeId 
+                                             AND J_CoverageBenefitStatus__c = 'Active' WITH SECURITY_ENFORCED LIMIT 3]) {
+        if (coverageBenefit.MemberPlan.Status == 'Active') {
+            if (coverageBenefit.MemberPlan.J_Role__c == 'Primary') {
+                hubTracking.Primary_Prior_Authorization_Required__c = (coverageBenefit.J_PriorAuthorizationRequired__c == 'Yes') ? 'Y' : 'N';
+                hubTracking.PRIMARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
+                hubTracking.PRIMARY_COPAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
+                hubTracking.FINAL_PATIENT_OUT_OF_POCKET_COST__c = coverageBenefit.J_OOPMax__c;
+            }
+            if (coverageBenefit.MemberPlan.J_Role__c == 'Secondary') {
+                hubTracking.SECONDARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
+                hubTracking.SECONDARY_CO_PAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
             }
         }
-        
-        for(Case tp : [SELECT Id, Disease__c FROM Case WHERE Care_Program_Enrollee__c = :enrolleeId AND RecordTypeId = :carePlanRecordTypeId WITH SECURITY_ENFORCED ]){
-            
-            if(tp.Disease__c == 'Fibrodysplasia Ossificans Progressiva (FOP)'){
-                hubTracking.Indication__c = 'FOP';
-                
-            } else {
-                hubTracking.Indication__c = tp.Disease__c;
-            
-            }
-            
-        }
-        
-        
-        for(CoverageBenefit coverageBenefit : [SELECT Id, J_PriorAuthorizationRequired__c,J_BenefitType__c, MemberPlan.Status, MemberPlan.J_Role__c, J_CoPay__c,
-                                               J_OOPMax__c from CoverageBenefit where Care_Program_Enrollee__c =:enrolleeId AND J_CoverageBenefitStatus__c = 'Active' WITH SECURITY_ENFORCED LIMIT 3]){
-                                                   
-                                                   if(coverageBenefit.MemberPlan.Status == 'Active' && coverageBenefit.MemberPlan.J_Role__c == 'Primary'){
-                                                       if(coverageBenefit.J_PriorAuthorizationRequired__c == 'Yes'){
-                                                           hubTracking.Primary_Prior_Authorization_Required__c = 'Y';
-                                                       }
-                                                       hubTracking.PRIMARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
-                                                       hubTracking.PRIMARY_COPAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
-                                                       hubTracking.FINAL_PATIENT_OUT_OF_POCKET_COST__c = coverageBenefit.J_OOPMax__c;
-                                                   }
-                                                   if(coverageBenefit.MemberPlan.Status == 'Active' && coverageBenefit.MemberPlan.J_Role__c == 'Secondary'){
-                                                       hubTracking.SECONDARY_BENEFIT_TYPE__c = coverageBenefit.J_BenefitType__c;
-                                                       hubTracking.SECONDARY_CO_PAY_AMOUNT__c = coverageBenefit.J_CoPay__c;
-                                                   }
-                                                   for(CarePreauth priAuth : [SELECT Id, Status, J_AuthorizationEndDate__c, MemberPlan.J_Role__c from CarePreauth where J_CoverageBenefit__c =: coverageBenefit.Id AND Status = 'Active' WITH SECURITY_ENFORCED LIMIT 1 ]){
-                                                       
-                                                       if(priAuth.MemberPlan.J_Role__c == 'Primary'){
-                                                           hubTracking.PA_Status__c = priAuth.Status;
-                                                           hubTracking.PRIMARY_PA_EXPIRATION_DATE__c = priAuth.J_AuthorizationEndDate__c;
-                                                       }
-                                                   }
-                                               }
-        if(String.isBlank(hubTracking.Patient_State__c)){
-            hubTracking.Patient_State__c = 'NA';
-        }
-        if(String.isBlank(hubTracking.Referral_Source__c)){
-            hubTracking.Referral_Source__c = 'HUB';
-        }
-        for(J_Charitable__c papTpap : [SELECT Id, J_CharitableProgramType__c, J_Enrollment_End_Date__c from J_Charitable__c where Care_Program_Enrollee__c =: enrolleeId AND J_CharitableStatus__c = 'Active' WITH SECURITY_ENFORCED LIMIT 1]){
-            
-            if(papTpap.J_CharitableProgramType__c == 'TPAP'){
-                hubTracking.TPAP_Expiration_Date__c = String.valueOf(papTpap.J_Enrollment_End_Date__c)?.replaceAll('-','');
+
+        for (CarePreauth priAuth : [SELECT Id, Status, J_AuthorizationEndDate__c, MemberPlan.J_Role__c 
+                                    FROM CarePreauth WHERE J_CoverageBenefit__c = :coverageBenefit.Id 
+                                    AND Status = 'Active' WITH SECURITY_ENFORCED LIMIT 1]) {
+            if (priAuth.MemberPlan.J_Role__c == 'Primary') {
+                hubTracking.PA_Status__c = priAuth.Status;
+                hubTracking.PRIMARY_PA_EXPIRATION_DATE__c = priAuth.J_AuthorizationEndDate__c;
             }
         }
+    }
+}
+
+private static void handleCharitableProgram(String enrolleeId, T_Hub_Tracking__c hubTracking) {
+    for (J_Charitable__c papTpap : [SELECT Id, J_CharitableProgramType__c, J_Enrollment_End_Date__c 
+                                    FROM J_Charitable__c WHERE Care_Program_Enrollee__c = :enrolleeId 
+                                    AND J_CharitableStatus__c = 'Active' WITH SECURITY_ENFORCED LIMIT 1]) {
+        if (papTpap.J_CharitableProgramType__c == 'TPAP') {
+            hubTracking.TPAP_Expiration_Date__c = String.valueOf(papTpap.J_Enrollment_End_Date__c)?.replaceAll('-', '');
+        }
+    }
+}
+
+private static void finalizeHubTrackingFields(T_Hub_Tracking__c hubTracking) {
+    if (String.isBlank(hubTracking.Patient_State__c)) {
+        hubTracking.Patient_State__c = 'NA';
+    }
+    if (String.isBlank(hubTracking.Referral_Source__c)) {
+        hubTracking.Referral_Source__c = 'HUB';
+    }
+
         
         
         hubTrackings.add(hubTracking);
@@ -191,8 +232,8 @@ public without sharing class PatientHubTrackingEventTriggerHandler {
         SObject[] patientMedicationDosageRecords = querySourceObject(enrolleeId, patientId, 'PatientMedicationDosage', hubTrackingMappingsForPatientMedication);
         List<T_Hub_Tracking__c> hubTrackingList = new List<T_Hub_Tracking__c>(hubTrackings); 
         for(T_Hub_Tracking__c populatedHubTracking : hubTrackingList){
-            Integer count = 1;         
-            //string cf = populatedHubTracking.Current_Fill_Dose_Adjustment__c;
+            Integer count = 1;
+
             
             for(SObject sourceObject : patientMedicationDosageRecords)
             {              
