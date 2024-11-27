@@ -296,9 +296,7 @@ private static void finalizeHubTrackingFields(T_Hub_Tracking__c hubTracking) {
     }
     
     private static String processPatientMedicationDosage(T_Hub_Tracking__c hubTracking, SObject sourceObject, 
-                                                          List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication, 
-                                                          Map<String, SObject> ndcToReferralMap, 
-                                                          Map<String, SObject> medicationDosageIdToOrderMap) {
+                                                          List<Hub_Tracking_Field_Mapping__mdt> hubTrackingMappingsForPatientMedication) {
         String ndcCode = '';
         
         for (Hub_Tracking_Field_Mapping__mdt hubTrackingmapping : hubTrackingMappingsForPatientMedication) {
